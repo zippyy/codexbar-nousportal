@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (for example 0.1.0 or v0.1.0)"
+        description: "Release version (for example 0.2.0 or v0.2.0)"
         required: true
         type: string
       prerelease:
@@ -54,16 +54,40 @@ jobs:
 
           if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
             echo "Invalid release version: $version" >&2
-            echo "Expected 1.2.3, v1.2.3, 1.2.3-beta.1, or v1.2.3-beta.1" >&2
             exit 2
           fi
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
-          echo "Releasing $version (prerelease=$prerelease)"
 
       - name: Run plugin fixture tests
         run: node tests/plugin.test.mjs
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache-dependency-path: helper/go.mod
+
+      - name: Test helper
+        working-directory: helper
+        run: |
+          go test ./...
+          go vet ./...
+
+      - name: Build universal macOS helper
+        shell: bash
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          ldflags="-s -w -X main.version=$VERSION"
+          (cd helper && GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="$ldflags" -o ../build/helper-arm64 .)
+          (cd helper && GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="$ldflags" -o ../build/helper-amd64 .)
+          lipo -create build/helper-arm64 build/helper-amd64 -output build/codexbar-nousportal-helper
+          codesign --force --sign - build/codexbar-nousportal-helper
+          lipo -info build/codexbar-nousportal-helper
 
       - name: Checkout current CodexBar
         uses: actions/checkout@v4
@@ -96,10 +120,8 @@ jobs:
         id: upstream
         shell: bash
         run: |
-          set -euo pipefail
           sha="$(git -C CodexBar rev-parse HEAD)"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "CodexBar revision: $sha"
 
       - name: Build stock CodexBar CLI
         working-directory: CodexBar
@@ -115,33 +137,24 @@ jobs:
           trap 'rm -f "$plugin_path"' EXIT
           cp nousportal.js "$plugin_path"
 
-          echo "Installed CI plugin at: $plugin_path"
           bin_dir="$(cd CodexBar && swift build -c release --show-bin-path)"
           output="$("$bin_dir/CodexBarCLI" plugins list)"
           printf '%s\n' "$output"
+          printf '%s\n' "$output" | grep -F $'nous-portal\tNous Portal\t' >/dev/null
 
-          if ! printf '%s\n' "$output" | grep -F $'nous-portal\tNous Portal\t' >/dev/null; then
-            echo "Stock CodexBar did not discover the Nous Portal plugin." >&2
-            echo "Expected plugin directory: $providers_dir" >&2
-            ls -la "$providers_dir" >&2 || true
-            exit 1
-          fi
-
-      - name: Build release asset
+      - name: Build release assets
         shell: bash
         run: |
           bash ./build-release.sh \
             "${{ steps.release.outputs.version }}" \
-            "${{ steps.upstream.outputs.sha }}"
+            "${{ steps.upstream.outputs.sha }}" \
+            build/codexbar-nousportal-helper
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: codexbar-nousportal-${{ steps.release.outputs.version }}
-          path: |
-            dist/*.js
-            dist/*.sha256
-            dist/*.txt
+          path: dist/*
           if-no-files-found: error
           retention-days: 30
 
@@ -151,25 +164,25 @@ jobs:
           cat > release-notes.md <<'EOF'
           ## CodexBar Nous Portal plugin
 
-          True user-installable CodexBar provider for Nous Portal subscription and credit usage.
+          Importable CodexBar provider for Nous Portal subscription and credit usage.
+
+          ### Why the helper exists
+
+          Nous Portal currently uses Privy's default browser localStorage session on many accounts. CodexBar user plugins can broker Chrome cookies but cannot read browser localStorage or `~/.hermes/auth.json`. The localhost helper bridges that gap without exposing OAuth tokens to the plugin.
 
           ### Install
 
-          1. Download `codexbar-nousportal-${{ steps.release.outputs.version }}.js` from this release.
-          2. Open **CodexBar → Settings → Plugins → Install…**.
-          3. Select the downloaded `.js` file and approve access to `https://portal.nousresearch.com` and the Portal browser cookie.
-          4. Sign in to `portal.nousresearch.com` in Chrome if you are not already signed in.
-          5. Enable **Nous Portal** in CodexBar.
+          1. Download `codexbar-nousportal-${{ steps.release.outputs.version }}-macos.zip` and extract it.
+          2. Run `./install-helper-${{ steps.release.outputs.version }}.sh` from the extracted folder.
+          3. In CodexBar, choose **Settings → Plugins → Install…** and select `codexbar-nousportal-${{ steps.release.outputs.version }}.js`.
+          4. Enter Helper URL: `http://127.0.0.1:38417`.
+          5. Approve the loopback origin and enable the plugin.
 
-          No CodexBar rebuild and no Hermes credential-file access are required.
+          The helper binds only to `127.0.0.1`, reads the existing Hermes OAuth state, delegates refresh to Hermes, and returns only Nous account/billing JSON to CodexBar.
 
           ### Validation
 
-          This release was loaded as a dynamic user plugin by stock CodexBar at commit:
-
-          `${{ steps.upstream.outputs.sha }}`
-
-          Fixture tests also validate billing parsing, rollover handling, expired authentication, and missing-cookie behavior.
+          This release was loaded as a dynamic user plugin by stock CodexBar at commit `${{ steps.upstream.outputs.sha }}` and the universal helper was built for both Apple Silicon and Intel macOS.
           EOF
 
       - name: Publish GitHub Release
@@ -188,9 +201,7 @@ jobs:
 
           args=(
             release create "$VERSION"
-            dist/*.js
-            dist/*.sha256
-            dist/*.txt
+            dist/*
             --repo "$GITHUB_REPOSITORY"
             --target "$GITHUB_SHA"
             --title "CodexBar Nous Portal $VERSION"
