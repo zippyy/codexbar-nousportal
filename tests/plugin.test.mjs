@@ -116,9 +116,9 @@ response = { status: 401, headers: {}, json: {} };
 await assert.rejects(() => provider.fetchUsage(ctx), /authenticationExpired/);
 
 cookieHeader = "privy-session=only-session";
-await assert.rejects(() => provider.fetchUsage(ctx), /access-token cookie is missing/);
+await assert.rejects(() => provider.fetchUsage(ctx), /renewable browser session but no usable access token/);
 
 cookieHeader = "other=value";
-await assert.rejects(() => provider.fetchUsage(ctx), /Nous Portal login cookie not found/);
+await assert.rejects(() => provider.fetchUsage(ctx), /No usable Nous Portal login token was found/);
 
 console.log("Nous Portal plugin fixture tests passed");
