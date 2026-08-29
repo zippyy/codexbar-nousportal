@@ -63,6 +63,37 @@ If Hermes is not logged into Nous yet:
 hermes portal
 ```
 
+## Releases
+
+`.github/workflows/release.yml` builds and publishes versioned provider bundles.
+
+A release can be started either by pushing a semantic-version tag:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+or from **Actions → Build and release plugin → Run workflow**, where you enter a version such as `v0.1.0` and optionally mark it as a prerelease.
+
+Before publishing, the workflow:
+
+1. checks out the current CodexBar `main` revision;
+2. selects the same Xcode 26.x toolchain family used by CodexBar CI;
+3. applies the Nous Portal provider;
+4. runs the focused `NousPortal` Swift tests;
+5. compiles the patched CodexBar release product;
+6. builds ZIP and tar.gz provider bundles plus SHA-256 checksums;
+7. publishes those files as GitHub Release assets.
+
+Each bundle contains `apply.sh`, the provider overlay, install instructions, and `BUILD-METADATA.txt` recording the exact CodexBar commit used for validation.
+
+You can also build the release assets locally:
+
+```bash
+bash ./build-release.sh v0.1.0
+```
+
 ## Verify against current CodexBar
 
 On macOS:
