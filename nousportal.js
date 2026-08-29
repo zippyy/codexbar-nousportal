@@ -4,6 +4,7 @@ const DEFAULT_HELPER_URL = "http://127.0.0.1:38417";
 defineProvider({
   id: "nous-portal",
   name: "Nous Portal",
+  topLevel: true,
   icon: { monogram: "N", tint: "#6C5CE7" },
   endpoints: [{ setting: "HELPER_URL", policy: "https-or-loopback-http" }],
   settings: [
