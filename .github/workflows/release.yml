@@ -47,8 +47,8 @@ jobs:
             prerelease=false
             [[ "$version" == *-* ]] && prerelease=true
           else
-            version="${DISPATCH_VERSION#v}"
-            version="v${version}"
+            raw_version="${DISPATCH_VERSION#v}"
+            version="v${raw_version}"
             prerelease="${DISPATCH_PRERELEASE:-false}"
           fi
 
