@@ -10,7 +10,7 @@ on:
 
 jobs:
   test:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - name: Checkout provider overlay
         uses: actions/checkout@v4
@@ -21,6 +21,19 @@ jobs:
           repository: steipete/CodexBar
           path: CodexBar
           fetch-depth: 1
+
+      - name: Select CodexBar Xcode toolchain
+        run: |
+          set -euo pipefail
+          for candidate in /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app; do
+            if [[ -d "$candidate" ]]; then
+              sudo xcode-select -s "${candidate}/Contents/Developer"
+              echo "DEVELOPER_DIR=${candidate}/Contents/Developer" >> "$GITHUB_ENV"
+              break
+            fi
+          done
+          xcodebuild -version
+          swift --version
 
       - name: Apply Nous Portal provider
         run: ./apply.sh CodexBar
