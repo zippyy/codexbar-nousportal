@@ -110,6 +110,8 @@ v0.1.0
 
 The workflow normalizes both to `v0.1.0`.
 
+If an older workflow run failed because it rejected `0.1.0`, start a **new Run workflow** from current `main` rather than using **Re-run jobs** on that old run; GitHub reruns the workflow definition from the original commit.
+
 Release assets are:
 
 ```text
