@@ -40,17 +40,20 @@ const fixture = {
 };
 
 let observedRequest = null;
+let cookieHeader = "other=1; privy-token=test%2Eprivy%2Ejwt; privy-session=session";
+let response = { status: 200, headers: {}, json: fixture };
+
 const ctx = {
   browser: {
     async cookieHeader(domain) {
       assert.equal(domain, "portal.nousresearch.com");
-      return "other=1; privy-token=test%2Eprivy%2Ejwt; privy-session=session";
+      return cookieHeader;
     },
   },
   http: {
     async getJSON(url, options) {
       observedRequest = { url, options };
-      return { status: 200, headers: {}, json: fixture };
+      return response;
     },
   },
   fail: {
@@ -78,7 +81,7 @@ const ctx = {
   },
 };
 
-const snapshot = await provider.fetchUsage(ctx);
+let snapshot = await provider.fetchUsage(ctx);
 assert.equal(observedRequest.url, "https://portal.nousresearch.com/api/oauth/account");
 assert.equal(observedRequest.options.headers.Authorization, "Bearer test.privy.jwt");
 assert.match(observedRequest.options.headers.Cookie, /privy-token=/);
@@ -92,17 +95,30 @@ assert.equal(snapshot.dataConfidence, "exact");
 assert.ok(snapshot.details[0].rows.some((row) => row.label === "Top-up remaining" && row.value === "$7.25"));
 assert.ok(snapshot.details[0].rows.some((row) => row.label === "Total usable" && row.value === "$23.75"));
 
+cookieHeader = "__Host-privy-token=host%2Eprivy%2Ejwt; privy-id-token=id-token";
+response = { status: 200, headers: {}, json: fixture };
+snapshot = await provider.fetchUsage(ctx);
+assert.equal(observedRequest.options.headers.Authorization, "Bearer host.privy.jwt");
+
+cookieHeader = "__Secure-privy-token=secure%2Eprivy%2Ejwt; privy-id-token=id-token";
+snapshot = await provider.fetchUsage(ctx);
+assert.equal(observedRequest.options.headers.Authorization, "Bearer secure.privy.jwt");
+
 const rolloverFixture = structuredClone(fixture);
 rolloverFixture.paid_service_access.subscription_credits_remaining = 25;
 rolloverFixture.subscription.credits_remaining = 25;
-ctx.http.getJSON = async () => ({ status: 200, headers: {}, json: rolloverFixture });
+cookieHeader = "privy-token=test-token";
+response = { status: 200, headers: {}, json: rolloverFixture };
 const rolloverSnapshot = await provider.fetchUsage(ctx);
 assert.equal(rolloverSnapshot.primary, undefined, "rollover above monthly grant must not produce misleading percentage");
 
-ctx.http.getJSON = async () => ({ status: 401, headers: {}, json: {} });
+response = { status: 401, headers: {}, json: {} };
 await assert.rejects(() => provider.fetchUsage(ctx), /authenticationExpired/);
 
-ctx.browser.cookieHeader = async () => "privy-session=only-session";
-await assert.rejects(() => provider.fetchUsage(ctx), /missingCredential/);
+cookieHeader = "privy-session=only-session";
+await assert.rejects(() => provider.fetchUsage(ctx), /access-token cookie is missing/);
+
+cookieHeader = "other=value";
+await assert.rejects(() => provider.fetchUsage(ctx), /Nous Portal login cookie not found/);
 
 console.log("Nous Portal plugin fixture tests passed");
