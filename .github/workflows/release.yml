@@ -109,14 +109,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          plugin_home="$RUNNER_TEMP/plugin-home"
-          mkdir -p "$plugin_home/.config/codexbar/providers"
-          cp nousportal.js "$plugin_home/.config/codexbar/providers/nousportal.js"
+          providers_dir="$HOME/.config/codexbar/providers"
+          plugin_path="$providers_dir/nousportal-ci.js"
+          mkdir -p "$providers_dir"
+          trap 'rm -f "$plugin_path"' EXIT
+          cp nousportal.js "$plugin_path"
 
+          echo "Installed CI plugin at: $plugin_path"
           bin_dir="$(cd CodexBar && swift build -c release --show-bin-path)"
-          output="$(HOME="$plugin_home" "$bin_dir/CodexBarCLI" plugins list)"
+          output="$("$bin_dir/CodexBarCLI" plugins list)"
           printf '%s\n' "$output"
-          printf '%s\n' "$output" | grep -F $'nous-portal\tNous Portal\t' >/dev/null
+
+          if ! printf '%s\n' "$output" | grep -F $'nous-portal\tNous Portal\t' >/dev/null; then
+            echo "Stock CodexBar did not discover the Nous Portal plugin." >&2
+            echo "Expected plugin directory: $providers_dir" >&2
+            ls -la "$providers_dir" >&2 || true
+            exit 1
+          fi
 
       - name: Build release asset
         shell: bash
