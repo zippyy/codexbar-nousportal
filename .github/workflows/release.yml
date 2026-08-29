@@ -1,0 +1,203 @@
+name: Build and release plugin
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (for example v0.1.0)"
+        required: true
+        type: string
+      prerelease:
+        description: "Publish as a prerelease"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nousportal-release-${{ github.ref_name }}-${{ inputs.version || 'tag' }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    runs-on: macos-26
+
+    steps:
+      - name: Checkout Nous Portal provider
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release version
+        id: release
+        shell: bash
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+          DISPATCH_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            version="${GITHUB_REF_NAME}"
+            prerelease=false
+            [[ "$version" == *-* ]] && prerelease=true
+          else
+            version="${DISPATCH_VERSION}"
+            prerelease="${DISPATCH_PRERELEASE:-false}"
+          fi
+
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release version: $version" >&2
+            echo "Expected v1.2.3 or v1.2.3-beta.1" >&2
+            exit 2
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "Releasing $version (prerelease=$prerelease)"
+
+      - name: Checkout current CodexBar
+        uses: actions/checkout@v4
+        with:
+          repository: steipete/CodexBar
+          path: CodexBar
+          fetch-depth: 1
+
+      - name: Select CodexBar Xcode toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          selected=""
+          for candidate in /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app; do
+            if [[ -d "$candidate" ]]; then
+              sudo xcode-select -s "${candidate}/Contents/Developer"
+              selected="$candidate"
+              break
+            fi
+          done
+
+          if [[ -z "$selected" ]]; then
+            echo "No supported Xcode 26.x installation found." >&2
+            exit 1
+          fi
+
+          echo "DEVELOPER_DIR=${selected}/Contents/Developer" >> "$GITHUB_ENV"
+          xcodebuild -version
+          swift --version
+
+      - name: Record tested CodexBar revision
+        id: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(git -C CodexBar rev-parse HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "CodexBar revision: $sha"
+
+      - name: Apply Nous Portal provider
+        shell: bash
+        run: ./apply.sh CodexBar
+
+      - name: Run Nous Portal integration tests
+        working-directory: CodexBar
+        shell: bash
+        run: swift test --filter NousPortal
+
+      - name: Compile patched CodexBar release product
+        working-directory: CodexBar
+        shell: bash
+        run: swift build -c release --product CodexBar
+
+      - name: Build plugin release bundle
+        shell: bash
+        run: |
+          bash ./build-release.sh \
+            "${{ steps.release.outputs.version }}" \
+            "${{ steps.upstream.outputs.sha }}"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codexbar-nousportal-${{ steps.release.outputs.version }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Generate release notes
+        shell: bash
+        run: |
+          cat > release-notes.md <<'EOF'
+          ## CodexBar Nous Portal provider
+
+          Adds Nous Portal subscription and credit usage to CodexBar using the OAuth session already managed by Hermes Agent.
+
+          ### Install
+
+          ```bash
+          git clone https://github.com/steipete/CodexBar.git
+          unzip codexbar-nousportal-${{ steps.release.outputs.version }}.zip
+          cd codexbar-nousportal-${{ steps.release.outputs.version }}
+          ./apply.sh ../CodexBar
+          cd ../CodexBar
+          ./Scripts/compile_and_run.sh
+          ```
+
+          Then enable **Settings → Providers → Nous Portal**.
+
+          If Hermes has not authenticated with Nous Portal yet:
+
+          ```bash
+          hermes portal
+          ```
+
+          ### Validation
+
+          This release was automatically applied to and compiled against CodexBar commit:
+
+          `${{ steps.upstream.outputs.sha }}`
+
+          The release workflow also ran the focused `NousPortal` Swift tests before publishing.
+
+          > CodexBar currently requires provider IDs at compile time. This release is therefore an installable provider overlay for a CodexBar source checkout, not a hot-loadable binary plugin for an existing CodexBar.app.
+          EOF
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+          PRERELEASE: ${{ steps.release.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+
+          args=(
+            release create "$VERSION"
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.sha256
+            --repo "$GITHUB_REPOSITORY"
+            --target "$GITHUB_SHA"
+            --title "CodexBar Nous Portal $VERSION"
+            --notes-file release-notes.md
+          )
+
+          if [[ "$PRERELEASE" == "true" ]]; then
+            args+=(--prerelease)
+          else
+            args+=(--latest)
+          fi
+
+          gh "${args[@]}"
