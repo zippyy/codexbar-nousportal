@@ -30,6 +30,28 @@ jobs:
             exit 1
           fi
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache-dependency-path: helper/go.mod
+
+      - name: Test helper
+        working-directory: helper
+        run: |
+          go test ./...
+          go vet ./...
+
+      - name: Build helper for both macOS architectures
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          (cd helper && GOOS=darwin GOARCH=arm64 go build -trimpath -o ../build/helper-arm64 .)
+          (cd helper && GOOS=darwin GOARCH=amd64 go build -trimpath -o ../build/helper-amd64 .)
+          lipo -create build/helper-arm64 build/helper-amd64 -output build/codexbar-nousportal-helper
+          lipo -info build/codexbar-nousportal-helper
+
       - name: Checkout current CodexBar
         uses: actions/checkout@v4
         with:
