@@ -1,76 +1,71 @@
 # CodexBar Nous Portal Plugin
 
-A **true user-installable CodexBar plugin** for Nous Portal subscription and credit usage.
+A true user-installable CodexBar provider for **Nous Portal** subscription and credit usage.
 
-No CodexBar fork, source patch, or rebuild is required.
+This project is a normal CodexBar user plugin. It does **not** patch CodexBar source code and does **not** require rebuilding CodexBar.
 
 ## Install
 
-1. Download the latest `codexbar-nousportal-vX.Y.Z.js` from GitHub Releases.
+1. Download the latest `codexbar-nousportal-vX.Y.Z.js` release asset.
 2. Open **CodexBar → Settings → Plugins → Install…**.
 3. Select the downloaded `.js` file.
-4. Review and approve the requested access to `https://portal.nousresearch.com` and the Nous Portal browser cookie.
-5. Enable **Nous Portal**.
+4. Approve access to `https://portal.nousresearch.com` and the Portal browser cookie.
+5. Sign in to `portal.nousresearch.com` in Chrome if you are not already signed in.
+6. Enable **Nous Portal** in CodexBar.
 
-You can also install the source file from this repository directly:
+You can also install the development copy directly from this repository by selecting `nousportal.js`.
+
+## What it shows
+
+- Nous plan name
+- Monthly credit allowance
+- Monthly usage percentage
+- Subscription credits remaining
+- Purchased/top-up credits remaining
+- Total usable credits
+- Rollover credits
+- Renewal date
+- Organization/account identity
+- Member spend cap and current spend, when present
+- Active/depleted paid-access state
+
+## Authentication
+
+CodexBar user plugins cannot read `~/.hermes/auth.json`, launch Hermes, or run their own OAuth flow. This plugin therefore uses CodexBar's sandboxed **browser-cookie broker**.
+
+The plugin requests the `portal.nousresearch.com` browser session, extracts the Portal `privy-token`, and sends it as:
+
+```text
+Authorization: Bearer <privy-token>
+```
+
+to:
+
+```text
+GET https://portal.nousresearch.com/api/oauth/account
+```
+
+Current CodexBar user-plugin cookie import is Chrome-based, so sign in to Nous Portal in Chrome before enabling the plugin.
+
+No Nous token is stored in the plugin source or written to the repository.
+
+## Plugin file
 
 ```text
 nousportal.js
 ```
 
-CodexBar user plugins can also be installed manually by placing the file in:
+The dynamic provider ID is:
 
 ```text
-~/.config/codexbar/providers/
+nous-portal
 ```
 
-## Authentication
+This is the exact file format supported by **CodexBar → Settings → Plugins → Install…**.
 
-The plugin does **not** read `~/.hermes/auth.json` and does not store a Nous refresh token.
+## Testing
 
-Instead it uses CodexBar's sandboxed `browser-cookies` capability to obtain the logged-in Nous Portal browser session. It extracts the Portal `privy-token` and uses that credential for the account request.
-
-Current CodexBar user-plugin cookie brokerage imports the browser session from **Chrome**. If Nous Portal shows an authentication error in CodexBar:
-
-1. Open `https://portal.nousresearch.com` in Chrome.
-2. Sign in to Nous Portal.
-3. Return to CodexBar and refresh the Nous Portal plugin.
-
-This avoids Nous's rotating Hermes refresh-token flow entirely; the plugin never touches or rotates Hermes OAuth credentials.
-
-## What it shows
-
-- Plan name
-- Monthly plan price
-- Monthly credit allowance
-- Monthly usage percentage when it can be represented accurately
-- Subscription dollars remaining
-- Top-up dollars remaining
-- Total usable balance
-- Rollover balance
-- Renewal date
-- Account email and organization
-- Member spend and spend cap, when supplied by Portal
-- Paid-access state
-
-If rollover makes the subscription balance larger than the base monthly allowance, the plugin deliberately omits the percentage meter rather than showing a misleading negative/over-100% value. Dollar balances are still shown.
-
-## CodexBar permissions
-
-The plugin manifest declares only:
-
-```text
-Network origin: https://portal.nousresearch.com
-Capability: browser-cookies
-Capability: http-status
-Cookie domain: portal.nousresearch.com
-```
-
-The plugin cannot read local files, launch subprocesses, access Hermes credentials, use arbitrary network origins, or run Node/browser APIs inside CodexBar.
-
-## Development
-
-Run the standalone fixture tests:
+Run the local fixture tests with:
 
 ```bash
 node tests/plugin.test.mjs
@@ -78,73 +73,78 @@ node tests/plugin.test.mjs
 
 The tests cover:
 
-- Manifest identity and permissions
-- Portal cookie extraction
-- Authorization header construction
-- Billing/account response mapping
-- Monthly percentage calculation
-- Rollover behavior
-- Expired authentication
-- Missing Portal cookie behavior
+- provider manifest registration
+- Portal billing/credit mapping
+- monthly percentage calculation
+- rollover-credit behavior
+- expired authentication
+- missing Portal cookie handling
 
-## Upstream compatibility
+GitHub Actions additionally builds the current stock CodexBar CLI, places the plugin into a clean CodexBar user-plugin directory, and verifies that CodexBar discovers:
 
-`.github/workflows/upstream-compat.yml` regularly checks the plugin against the current stock `steipete/CodexBar` main branch.
+```text
+nous-portal    Nous Portal
+```
 
-CI:
-
-1. Runs the plugin fixture tests.
-2. Enforces CodexBar's 1 MiB plugin limit.
-3. Builds the stock CodexBar CLI.
-4. Places `nousportal.js` into a clean `~/.config/codexbar/providers/` directory.
-5. Runs `CodexBarCLI plugins list`.
-6. Fails unless stock CodexBar discovers `nous-portal` as a dynamic user provider.
-
-That means compatibility testing does **not** patch or rebuild CodexBar with a new built-in provider ID.
+No CodexBar source patch is applied during this validation.
 
 ## Releases
 
-Push a semantic version tag:
+`.github/workflows/release.yml` creates importable plugin releases.
+
+You can trigger a release either by pushing a semantic version tag:
 
 ```bash
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-or run **Actions → Build and release plugin → Run workflow**.
+or from **GitHub → Actions → Build and release plugin → Run workflow**.
 
-The release workflow validates the plugin against current stock CodexBar and publishes:
-
-```text
-codexbar-nousportal-vX.Y.Z.js
-codexbar-nousportal-vX.Y.Z.sha256
-codexbar-nousportal-vX.Y.Z.txt
-```
-
-The `.js` file is the artifact users import directly through **CodexBar → Settings → Plugins → Install…**.
-
-## Data source
-
-The provider requests:
+For a manual release, the version field accepts either form:
 
 ```text
-GET https://portal.nousresearch.com/api/oauth/account
+0.1.0
+v0.1.0
 ```
 
-and maps the billing fields Nous currently exposes to Hermes, including:
+The workflow normalizes both to `v0.1.0`.
+
+Release assets are:
 
 ```text
-subscription.monthly_credits
-subscription.credits_remaining
-subscription.rollover_credits
-subscription.current_period_end
-paid_service_access.subscription_credits_remaining
-paid_service_access.purchased_credits_remaining
-paid_service_access.total_usable_credits
-paid_service_access.member_spend_usd
-paid_service_access.member_spend_cap_usd
+codexbar-nousportal-v0.1.0.js
+codexbar-nousportal-v0.1.0.sha256
+codexbar-nousportal-v0.1.0.txt
 ```
 
-## License
+Before publishing, the workflow:
 
-This project is an independent CodexBar provider plugin and is not affiliated with Nous Research or the CodexBar project.
+1. runs plugin fixture tests;
+2. checks out current upstream CodexBar;
+3. builds stock `CodexBarCLI`;
+4. validates that the plugin is discovered as a dynamic user plugin;
+5. packages the `.js` file;
+6. generates SHA-256 metadata;
+7. publishes the GitHub Release.
+
+## Security model
+
+The plugin declares only the authority it needs:
+
+- HTTPS access to `portal.nousresearch.com`
+- browser-cookie access for `portal.nousresearch.com`
+
+It has no local filesystem access, subprocess access, Node APIs, arbitrary network access, or Hermes credential access. All network requests go through CodexBar's plugin sandbox.
+
+## Notes
+
+The account response is mapped using the same Nous Portal fields consumed by Hermes, including:
+
+- `subscription.monthly_credits`
+- `subscription.credits_remaining`
+- `paid_service_access.subscription_credits_remaining`
+- `paid_service_access.purchased_credits_remaining`
+- `paid_service_access.total_usable_credits`
+
+When rollover makes available subscription credits greater than the normal monthly allowance, the plugin avoids presenting a misleading monthly percentage while still displaying the actual balances.
