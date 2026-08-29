@@ -118,7 +118,7 @@ jobs:
       - name: Build release asset
         shell: bash
         run: |
-          ./build-release.sh \
+          bash ./build-release.sh \
             "${{ steps.release.outputs.version }}" \
             "${{ steps.upstream.outputs.sha }}"
 
