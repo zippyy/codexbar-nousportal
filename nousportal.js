@@ -9,9 +9,16 @@ defineProvider({
 
   async fetchUsage(ctx) {
     const cookieHeader = await ctx.browser.cookieHeader("portal.nousresearch.com");
-    const tokenMatch = /(?:^|;\s*)privy-token=([^;]+)/i.exec(cookieHeader);
+    const tokenMatch = /(?:^|;\s*)(?:__Host-|__Secure-)?privy-token=([^;]+)/i.exec(cookieHeader);
+    const renewableSession = /(?:^|;\s*)(?:privy-session|privy-refresh-token)=([^;]+)/i.test(cookieHeader);
 
     if (!tokenMatch) {
+      if (renewableSession) {
+        throw ctx.fail.missingCredential(
+          "Nous Portal session is present, but its access-token cookie is missing. Open or refresh portal.nousresearch.com in Chrome to renew the session, then refresh Nous Portal in CodexBar."
+        );
+      }
+
       throw ctx.fail.missingCredential(
         "Nous Portal login cookie not found. Sign in to portal.nousresearch.com in Chrome, then refresh Nous Portal in CodexBar."
       );
@@ -110,8 +117,6 @@ defineProvider({
       rows.push({ label: "Renews", value: ctx.format.monthDay(renewal) });
     }
 
-    // Rollover can make the current balance larger than the base monthly grant.
-    // In that case a percentage would be misleading, so show dollar balances only.
     const canShowMonthlyPercent =
       monthlyAllowance != null &&
       monthlyAllowance > 0 &&
