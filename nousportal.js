@@ -1,3 +1,5 @@
+const NOUS_PORTAL_PLUGIN_BUILD = "0.1.1-dev-cookie-diag";
+
 defineProvider({
   id: "nous-portal",
   name: "Nous Portal",
@@ -8,45 +10,65 @@ defineProvider({
   cookieDomains: ["portal.nousresearch.com"],
 
   async fetchUsage(ctx) {
+    const portalOrigin = "https://portal.nousresearch.com";
+    const accountURL = `${portalOrigin}/api/oauth/account`;
     const cookieHeader = await ctx.browser.cookieHeader("portal.nousresearch.com");
-    const tokenMatch = /(?:^|;\s*)(?:__Host-|__Secure-)?privy-token=([^;]+)/i.exec(cookieHeader);
-    const renewableSession = /(?:^|;\s*)(?:privy-session|privy-refresh-token)=([^;]+)/i.test(cookieHeader);
+    const cookieNames = cookieHeader
+      .split(";")
+      .map((part) => part.split("=", 1)[0].trim())
+      .filter(Boolean);
+    const cookieSummary = cookieNames.length > 0 ? cookieNames.join(", ") : "none";
 
-    if (!tokenMatch) {
-      if (renewableSession) {
+    const tokenMatch = /(?:^|;\s*)(?:__Host-|__Secure-)?privy-token=([^;]+)/i.exec(cookieHeader);
+    const renewableSession = /(?:^|;\s*)(?:__Host-|__Secure-)?(?:privy-session|privy-refresh-token)=([^;]+)/i.test(
+      cookieHeader
+    );
+
+    const requestHeaders = {
+      Cookie: cookieHeader,
+      Accept: "application/json",
+      Origin: portalOrigin,
+      Referer: `${portalOrigin}/`,
+    };
+
+    let response;
+
+    if (tokenMatch) {
+      let privyToken = tokenMatch[1];
+      try {
+        privyToken = decodeURIComponent(privyToken);
+      } catch {
+        // Cookie was already decoded; use it as-is.
+      }
+
+      response = await ctx.http.getJSON(accountURL, {
+        headers: {
+          ...requestHeaders,
+          Authorization: `Bearer ${privyToken}`,
+        },
+      });
+    } else {
+      // Some Portal sessions may be usable through the browser cookie jar even
+      // when the short-lived Privy access-token cookie is absent. Try the exact
+      // browser session first before asking the user to re-authenticate.
+      response = await ctx.http.getJSON(accountURL, { headers: requestHeaders });
+
+      if (response.status === 401 || response.status === 403) {
+        const prefix = `[${NOUS_PORTAL_PLUGIN_BUILD}] Cookies visible to CodexBar: ${cookieSummary}.`;
+        if (renewableSession) {
+          throw ctx.fail.missingCredential(
+            `${prefix} Nous Portal has a renewable browser session but no usable access token. Open or hard-refresh portal.nousresearch.com in Chrome, then use the top Plugins Refresh button before refreshing Nous Portal.`
+          );
+        }
         throw ctx.fail.missingCredential(
-          "Nous Portal session is present, but its access-token cookie is missing. Open or refresh portal.nousresearch.com in Chrome to renew the session, then refresh Nous Portal in CodexBar."
+          `${prefix} No usable Nous Portal login token was found. Sign in to portal.nousresearch.com in Chrome, then use the top Plugins Refresh button before refreshing Nous Portal.`
         );
       }
-
-      throw ctx.fail.missingCredential(
-        "Nous Portal login cookie not found. Sign in to portal.nousresearch.com in Chrome, then refresh Nous Portal in CodexBar."
-      );
     }
-
-    let privyToken = tokenMatch[1];
-    try {
-      privyToken = decodeURIComponent(privyToken);
-    } catch {
-      // Cookie was already decoded; use it as-is.
-    }
-
-    const response = await ctx.http.getJSON(
-      "https://portal.nousresearch.com/api/oauth/account",
-      {
-        headers: {
-          Authorization: `Bearer ${privyToken}`,
-          Cookie: cookieHeader,
-          Accept: "application/json",
-          Origin: "https://portal.nousresearch.com",
-          Referer: "https://portal.nousresearch.com/",
-        },
-      }
-    );
 
     if (response.status === 401 || response.status === 403) {
       throw ctx.fail.authenticationExpired(
-        "Nous Portal session expired. Sign in to portal.nousresearch.com in Chrome and refresh CodexBar."
+        `[${NOUS_PORTAL_PLUGIN_BUILD}] Nous Portal rejected the imported browser session. Cookies visible to CodexBar: ${cookieSummary}. Sign in to portal.nousresearch.com in Chrome, reload the Portal page, then refresh plugin discovery in CodexBar.`
       );
     }
 
