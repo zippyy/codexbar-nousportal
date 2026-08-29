@@ -1,0 +1,30 @@
+name: Upstream compatibility
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * 1"
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - name: Checkout provider overlay
+        uses: actions/checkout@v4
+
+      - name: Checkout CodexBar
+        uses: actions/checkout@v4
+        with:
+          repository: steipete/CodexBar
+          path: CodexBar
+          fetch-depth: 1
+
+      - name: Apply Nous Portal provider
+        run: ./apply.sh CodexBar
+
+      - name: Run provider tests
+        working-directory: CodexBar
+        run: swift test --filter NousPortal
