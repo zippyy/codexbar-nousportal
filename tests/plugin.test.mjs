@@ -13,8 +13,12 @@ vm.runInThisContext(source, { filename: "nousportal.js" });
 assert.ok(provider, "defineProvider was not called");
 assert.equal(provider.id, "nous-portal");
 assert.equal(provider.name, "Nous Portal");
-assert.deepEqual(provider.capabilities, ["browser-cookies", "http-status"]);
-assert.deepEqual(provider.cookieDomains, ["portal.nousresearch.com"]);
+assert.deepEqual(provider.capabilities, ["http-status"]);
+assert.equal(provider.endpoints.length, 1);
+assert.equal(provider.endpoints[0].setting, "HELPER_URL");
+assert.equal(provider.endpoints[0].policy, "https-or-loopback-http");
+assert.equal(provider.settings[0].key, "HELPER_URL");
+assert.equal(provider.settings[0].type, "plain");
 
 const fixture = {
   user: { email: "nick@example.com" },
@@ -39,20 +43,20 @@ const fixture = {
   },
 };
 
-let observedRequest = null;
-let cookieHeader = "other=1; privy-token=test%2Eprivy%2Ejwt; privy-session=session";
+let helperURL = "http://127.0.0.1:38417";
 let response = { status: 200, headers: {}, json: fixture };
+let observedURL = null;
 
 const ctx = {
-  browser: {
-    async cookieHeader(domain) {
-      assert.equal(domain, "portal.nousresearch.com");
-      return cookieHeader;
+  settings: {
+    get(key) {
+      assert.equal(key, "HELPER_URL");
+      return helperURL;
     },
   },
   http: {
-    async getJSON(url, options) {
-      observedRequest = { url, options };
+    async getJSON(url) {
+      observedURL = url;
       return response;
     },
   },
@@ -60,6 +64,7 @@ const ctx = {
     missingCredential: (message) => new Error(`missingCredential:${message}`),
     authenticationExpired: (message) => new Error(`authenticationExpired:${message}`),
     rateLimited: (message) => new Error(`rateLimited:${message}`),
+    providerUnavailable: (message) => new Error(`providerUnavailable:${message}`),
     apiFailure: (message) => new Error(`apiFailure:${message}`),
     parseFailure: (message) => new Error(`parseFailure:${message}`),
   },
@@ -82,9 +87,7 @@ const ctx = {
 };
 
 let snapshot = await provider.fetchUsage(ctx);
-assert.equal(observedRequest.url, "https://portal.nousresearch.com/api/oauth/account");
-assert.equal(observedRequest.options.headers.Authorization, "Bearer test.privy.jwt");
-assert.match(observedRequest.options.headers.Cookie, /privy-token=/);
+assert.equal(observedURL, "http://127.0.0.1:38417/v1/account");
 assert.equal(Math.round(snapshot.primary.usedPercent), 25);
 assert.equal(snapshot.primary.resetDescription, "$16.50 of $22.00 left");
 assert.equal(snapshot.identity.email, "nick@example.com");
@@ -95,30 +98,20 @@ assert.equal(snapshot.dataConfidence, "exact");
 assert.ok(snapshot.details[0].rows.some((row) => row.label === "Top-up remaining" && row.value === "$7.25"));
 assert.ok(snapshot.details[0].rows.some((row) => row.label === "Total usable" && row.value === "$23.75"));
 
-cookieHeader = "__Host-privy-token=host%2Eprivy%2Ejwt; privy-id-token=id-token";
-response = { status: 200, headers: {}, json: fixture };
-snapshot = await provider.fetchUsage(ctx);
-assert.equal(observedRequest.options.headers.Authorization, "Bearer host.privy.jwt");
-
-cookieHeader = "__Secure-privy-token=secure%2Eprivy%2Ejwt; privy-id-token=id-token";
-snapshot = await provider.fetchUsage(ctx);
-assert.equal(observedRequest.options.headers.Authorization, "Bearer secure.privy.jwt");
-
 const rolloverFixture = structuredClone(fixture);
 rolloverFixture.paid_service_access.subscription_credits_remaining = 25;
 rolloverFixture.subscription.credits_remaining = 25;
-cookieHeader = "privy-token=test-token";
 response = { status: 200, headers: {}, json: rolloverFixture };
 const rolloverSnapshot = await provider.fetchUsage(ctx);
 assert.equal(rolloverSnapshot.primary, undefined, "rollover above monthly grant must not produce misleading percentage");
 
-response = { status: 401, headers: {}, json: {} };
-await assert.rejects(() => provider.fetchUsage(ctx), /authenticationExpired/);
+response = { status: 401, headers: {}, json: { error: "OAuth expired" } };
+await assert.rejects(() => provider.fetchUsage(ctx), /authenticationExpired:.*OAuth expired/);
 
-cookieHeader = "privy-session=only-session";
-await assert.rejects(() => provider.fetchUsage(ctx), /renewable browser session but no usable access token/);
+response = { status: 503, headers: {}, json: { error: "Hermes executable not found" } };
+await assert.rejects(() => provider.fetchUsage(ctx), /providerUnavailable:.*Hermes executable not found/);
 
-cookieHeader = "other=value";
-await assert.rejects(() => provider.fetchUsage(ctx), /No usable Nous Portal login token was found/);
+helperURL = "";
+await assert.rejects(() => provider.fetchUsage(ctx), /missingCredential:.*127\.0\.0\.1:38417/);
 
 console.log("Nous Portal plugin fixture tests passed");
