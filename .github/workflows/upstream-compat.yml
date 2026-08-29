@@ -11,11 +11,26 @@ on:
 jobs:
   test:
     runs-on: macos-26
+
     steps:
-      - name: Checkout provider overlay
+      - name: Checkout Nous Portal plugin
         uses: actions/checkout@v4
 
-      - name: Checkout CodexBar
+      - name: Run plugin fixture tests
+        run: node tests/plugin.test.mjs
+
+      - name: Check plugin size
+        shell: bash
+        run: |
+          set -euo pipefail
+          bytes="$(wc -c < nousportal.js | tr -d ' ')"
+          echo "Plugin size: ${bytes} bytes"
+          if (( bytes > 1048576 )); then
+            echo "Plugin exceeds CodexBar's 1 MiB user-plugin limit." >&2
+            exit 1
+          fi
+
+      - name: Checkout current CodexBar
         uses: actions/checkout@v4
         with:
           repository: steipete/CodexBar
@@ -23,31 +38,42 @@ jobs:
           fetch-depth: 1
 
       - name: Select CodexBar Xcode toolchain
+        shell: bash
         run: |
           set -euo pipefail
+          selected=""
           for candidate in /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app; do
             if [[ -d "$candidate" ]]; then
               sudo xcode-select -s "${candidate}/Contents/Developer"
-              echo "DEVELOPER_DIR=${candidate}/Contents/Developer" >> "$GITHUB_ENV"
+              selected="$candidate"
               break
             fi
           done
+          if [[ -z "$selected" ]]; then
+            echo "No supported Xcode 26.x installation found." >&2
+            exit 1
+          fi
+          echo "DEVELOPER_DIR=${selected}/Contents/Developer" >> "$GITHUB_ENV"
           xcodebuild -version
           swift --version
 
-      - name: Apply Nous Portal provider
-        run: ./apply.sh CodexBar
-
-      - name: Run provider tests
+      - name: Build stock CodexBar CLI
         working-directory: CodexBar
-        run: swift test --filter NousPortal
+        run: swift build -c release --product CodexBarCLI
 
-      - name: Smoke test release bundle
+      - name: Validate plugin discovery in stock CodexBar
+        shell: bash
         run: |
-          bash ./build-release.sh \
-            v0.0.0-ci \
-            "$(git -C CodexBar rev-parse HEAD)"
-          test -s dist/codexbar-nousportal-v0.0.0-ci.zip
-          test -s dist/codexbar-nousportal-v0.0.0-ci.tar.gz
-          test -s dist/codexbar-nousportal-v0.0.0-ci.sha256
-          (cd dist && shasum -a 256 -c codexbar-nousportal-v0.0.0-ci.sha256)
+          set -euo pipefail
+          plugin_home="$RUNNER_TEMP/plugin-home"
+          mkdir -p "$plugin_home/.config/codexbar/providers"
+          cp nousportal.js "$plugin_home/.config/codexbar/providers/nousportal.js"
+
+          bin_dir="$(cd CodexBar && swift build -c release --show-bin-path)"
+          output="$(HOME="$plugin_home" "$bin_dir/CodexBarCLI" plugins list)"
+          printf '%s\n' "$output"
+
+          if ! printf '%s\n' "$output" | grep -F $'nous-portal\tNous Portal\t' >/dev/null; then
+            echo "Stock CodexBar did not discover the Nous Portal plugin." >&2
+            exit 1
+          fi
