@@ -28,7 +28,7 @@ jobs:
     runs-on: macos-26
 
     steps:
-      - name: Checkout Nous Portal provider
+      - name: Checkout Nous Portal plugin
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -41,13 +41,12 @@ jobs:
           DISPATCH_PRERELEASE: ${{ inputs.prerelease }}
         run: |
           set -euo pipefail
-
-          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
-            version="${GITHUB_REF_NAME}"
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            version="$GITHUB_REF_NAME"
             prerelease=false
             [[ "$version" == *-* ]] && prerelease=true
           else
-            version="${DISPATCH_VERSION}"
+            version="$DISPATCH_VERSION"
             prerelease="${DISPATCH_PRERELEASE:-false}"
           fi
 
@@ -59,7 +58,9 @@ jobs:
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
-          echo "Releasing $version (prerelease=$prerelease)"
+
+      - name: Run plugin fixture tests
+        run: node tests/plugin.test.mjs
 
       - name: Checkout current CodexBar
         uses: actions/checkout@v4
@@ -80,12 +81,10 @@ jobs:
               break
             fi
           done
-
           if [[ -z "$selected" ]]; then
             echo "No supported Xcode 26.x installation found." >&2
             exit 1
           fi
-
           echo "DEVELOPER_DIR=${selected}/Contents/Developer" >> "$GITHUB_ENV"
           xcodebuild -version
           swift --version
@@ -99,24 +98,27 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "CodexBar revision: $sha"
 
-      - name: Apply Nous Portal provider
-        shell: bash
-        run: ./apply.sh CodexBar
-
-      - name: Run Nous Portal integration tests
+      - name: Build stock CodexBar CLI
         working-directory: CodexBar
-        shell: bash
-        run: swift test --filter NousPortal
+        run: swift build -c release --product CodexBarCLI
 
-      - name: Compile patched CodexBar release product
-        working-directory: CodexBar
-        shell: bash
-        run: swift build -c release --product CodexBar
-
-      - name: Build plugin release bundle
+      - name: Validate plugin import in stock CodexBar
         shell: bash
         run: |
-          bash ./build-release.sh \
+          set -euo pipefail
+          plugin_home="$RUNNER_TEMP/plugin-home"
+          mkdir -p "$plugin_home/.config/codexbar/providers"
+          cp nousportal.js "$plugin_home/.config/codexbar/providers/nousportal.js"
+
+          bin_dir="$(cd CodexBar && swift build -c release --show-bin-path)"
+          output="$(HOME="$plugin_home" "$bin_dir/CodexBarCLI" plugins list)"
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" | grep -F $'nous-portal\tNous Portal\t' >/dev/null
+
+      - name: Build release asset
+        shell: bash
+        run: |
+          ./build-release.sh \
             "${{ steps.release.outputs.version }}" \
             "${{ steps.upstream.outputs.sha }}"
 
@@ -125,9 +127,9 @@ jobs:
         with:
           name: codexbar-nousportal-${{ steps.release.outputs.version }}
           path: |
-            dist/*.zip
-            dist/*.tar.gz
+            dist/*.js
             dist/*.sha256
+            dist/*.txt
           if-no-files-found: error
           retention-days: 30
 
@@ -135,38 +137,27 @@ jobs:
         shell: bash
         run: |
           cat > release-notes.md <<'EOF'
-          ## CodexBar Nous Portal provider
+          ## CodexBar Nous Portal plugin
 
-          Adds Nous Portal subscription and credit usage to CodexBar using the OAuth session already managed by Hermes Agent.
+          True user-installable CodexBar provider for Nous Portal subscription and credit usage.
 
           ### Install
 
-          ```bash
-          git clone https://github.com/steipete/CodexBar.git
-          unzip codexbar-nousportal-${{ steps.release.outputs.version }}.zip
-          cd codexbar-nousportal-${{ steps.release.outputs.version }}
-          ./apply.sh ../CodexBar
-          cd ../CodexBar
-          ./Scripts/compile_and_run.sh
-          ```
+          1. Download `codexbar-nousportal-${{ steps.release.outputs.version }}.js` from this release.
+          2. Open **CodexBar → Settings → Plugins → Install…**.
+          3. Select the downloaded `.js` file and approve access to `https://portal.nousresearch.com` and the Portal browser cookie.
+          4. Sign in to `portal.nousresearch.com` in Chrome if you are not already signed in.
+          5. Enable **Nous Portal** in CodexBar.
 
-          Then enable **Settings → Providers → Nous Portal**.
-
-          If Hermes has not authenticated with Nous Portal yet:
-
-          ```bash
-          hermes portal
-          ```
+          No CodexBar rebuild and no Hermes credential-file access are required.
 
           ### Validation
 
-          This release was automatically applied to and compiled against CodexBar commit:
+          This release was loaded as a dynamic user plugin by stock CodexBar at commit:
 
           `${{ steps.upstream.outputs.sha }}`
 
-          The release workflow also ran the focused `NousPortal` Swift tests before publishing.
-
-          > CodexBar currently requires provider IDs at compile time. This release is therefore an installable provider overlay for a CodexBar source checkout, not a hot-loadable binary plugin for an existing CodexBar.app.
+          Fixture tests also validate billing parsing, rollover handling, expired authentication, and missing-cookie behavior.
           EOF
 
       - name: Publish GitHub Release
@@ -185,9 +176,9 @@ jobs:
 
           args=(
             release create "$VERSION"
-            dist/*.zip
-            dist/*.tar.gz
+            dist/*.js
             dist/*.sha256
+            dist/*.txt
             --repo "$GITHUB_REPOSITORY"
             --target "$GITHUB_SHA"
             --title "CodexBar Nous Portal $VERSION"
