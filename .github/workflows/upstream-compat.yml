@@ -41,3 +41,13 @@ jobs:
       - name: Run provider tests
         working-directory: CodexBar
         run: swift test --filter NousPortal
+
+      - name: Smoke test release bundle
+        run: |
+          bash ./build-release.sh \
+            v0.0.0-ci \
+            "$(git -C CodexBar rev-parse HEAD)"
+          test -s dist/codexbar-nousportal-v0.0.0-ci.zip
+          test -s dist/codexbar-nousportal-v0.0.0-ci.tar.gz
+          test -s dist/codexbar-nousportal-v0.0.0-ci.sha256
+          (cd dist && shasum -a 256 -c codexbar-nousportal-v0.0.0-ci.sha256)
