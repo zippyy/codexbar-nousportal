@@ -1,19 +1,69 @@
 # CodexBar Nous Portal Plugin
 
-A true user-installable CodexBar provider for **Nous Portal** subscription and credit usage.
+A user-installable CodexBar provider for **Nous Portal** subscription and credit usage.
 
-This project is a normal CodexBar user plugin. It does **not** patch CodexBar source code and does **not** require rebuilding CodexBar.
+The `.js` is a normal CodexBar user plugin. It does **not** patch CodexBar or require rebuilding CodexBar.
+
+## Why a helper is required
+
+Nous Portal uses Privy's default browser-session mode for many accounts. In that mode the access token lives in browser localStorage rather than a `privy-token` cookie.
+
+CodexBar user plugins can broker Chrome cookies, but they cannot read browser localStorage, `~/.hermes/auth.json`, local files, or subprocesses. That means a cookie-only plugin cannot reliably authenticate to Nous Portal.
+
+This project therefore includes a tiny localhost helper. The helper:
+
+- binds only to `127.0.0.1:38417`;
+- reads the existing Hermes Nous OAuth state from `~/.hermes/auth.json` (or `HERMES_HOME`);
+- lets `hermes status` handle OAuth refresh/rotation when needed;
+- calls `GET https://portal.nousresearch.com/api/oauth/account` with the current Hermes access token;
+- returns only the Nous account/billing JSON to CodexBar;
+- never returns OAuth access or refresh tokens to the plugin.
 
 ## Install
 
-1. Download the latest `codexbar-nousportal-vX.Y.Z.js` release asset.
-2. Open **CodexBar → Settings → Plugins → Install…**.
-3. Select the downloaded `.js` file.
-4. Approve access to `https://portal.nousresearch.com` and the Portal browser cookie.
-5. Sign in to `portal.nousresearch.com` in Chrome if you are not already signed in.
-6. Enable **Nous Portal** in CodexBar.
+For releases, download and extract:
 
-You can also install the development copy directly from this repository by selecting `nousportal.js`.
+```text
+codexbar-nousportal-v0.2.0-macos.zip
+```
+
+Then run the included helper installer:
+
+```bash
+./install-helper-v0.2.0.sh
+```
+
+Verify it is running:
+
+```bash
+curl http://127.0.0.1:38417/health
+```
+
+Then install the `.js` in:
+
+**CodexBar → Settings → Plugins → Install…**
+
+When CodexBar asks for the plugin setting, enter:
+
+```text
+Helper URL: http://127.0.0.1:38417
+```
+
+Approve the loopback origin and enable **Nous Portal**.
+
+If Hermes is not authenticated to Nous, run:
+
+```bash
+hermes model
+```
+
+or:
+
+```bash
+hermes status
+```
+
+and refresh the plugin.
 
 ## What it shows
 
@@ -29,115 +79,102 @@ You can also install the development copy directly from this repository by selec
 - Member spend cap and current spend, when present
 - Active/depleted paid-access state
 
-## Authentication
-
-CodexBar user plugins cannot read `~/.hermes/auth.json`, launch Hermes, or run their own OAuth flow. This plugin therefore uses CodexBar's sandboxed **browser-cookie broker**.
-
-The plugin requests the `portal.nousresearch.com` browser session, extracts the Portal `privy-token`, and sends it as:
-
-```text
-Authorization: Bearer <privy-token>
-```
-
-to:
-
-```text
-GET https://portal.nousresearch.com/api/oauth/account
-```
-
-Current CodexBar user-plugin cookie import is Chrome-based, so sign in to Nous Portal in Chrome before enabling the plugin.
-
-No Nous token is stored in the plugin source or written to the repository.
-
 ## Plugin file
 
 ```text
 nousportal.js
 ```
 
-The dynamic provider ID is:
+Dynamic provider ID:
 
 ```text
 nous-portal
 ```
 
-This is the exact file format supported by **CodexBar → Settings → Plugins → Install…**.
+## Helper
+
+Source:
+
+```text
+helper/main.go
+```
+
+Default listener:
+
+```text
+http://127.0.0.1:38417
+```
+
+The release workflow builds a universal macOS binary containing both Apple Silicon and Intel slices.
+
+The installer places it at:
+
+```text
+~/.local/bin/codexbar-nousportal-helper
+```
+
+and installs a per-user LaunchAgent:
+
+```text
+~/Library/LaunchAgents/com.zippyy.codexbar-nousportal-helper.plist
+```
+
+Logs:
+
+```text
+~/Library/Logs/CodexBar/nousportal-helper.log
+```
 
 ## Testing
 
-Run the local fixture tests with:
+Plugin fixtures:
 
 ```bash
 node tests/plugin.test.mjs
 ```
 
-The tests cover:
+Helper:
 
-- provider manifest registration
-- Portal billing/credit mapping
-- monthly percentage calculation
-- rollover-credit behavior
-- expired authentication
-- missing Portal cookie handling
-
-GitHub Actions additionally builds the current stock CodexBar CLI, places the plugin into a clean CodexBar user-plugin directory, and verifies that CodexBar discovers:
-
-```text
-nous-portal    Nous Portal
+```bash
+cd helper
+go test ./...
+go vet ./...
 ```
 
-No CodexBar source patch is applied during this validation.
+GitHub Actions additionally:
+
+1. builds the helper for `darwin/arm64` and `darwin/amd64`;
+2. combines them into one universal binary;
+3. builds the current stock CodexBar CLI;
+4. verifies stock CodexBar discovers the `.js` as `nous-portal`.
 
 ## Releases
 
-`.github/workflows/release.yml` creates importable plugin releases.
+Trigger a release by pushing a semantic tag or using **GitHub → Actions → Build and release plugin → Run workflow**.
 
-You can trigger a release either by pushing a semantic version tag:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-or from **GitHub → Actions → Build and release plugin → Run workflow**.
-
-For a manual release, the version field accepts either form:
+Manual versions accept either:
 
 ```text
-0.1.0
-v0.1.0
+0.2.0
+v0.2.0
 ```
 
-The workflow normalizes both to `v0.1.0`.
-
-If an older workflow run failed because it rejected `0.1.0`, start a **new Run workflow** from current `main` rather than using **Re-run jobs** on that old run; GitHub reruns the workflow definition from the original commit.
-
-Release assets are:
+Release assets include:
 
 ```text
-codexbar-nousportal-v0.1.0.js
-codexbar-nousportal-v0.1.0.sha256
-codexbar-nousportal-v0.1.0.txt
+codexbar-nousportal-v0.2.0.js
+codexbar-nousportal-helper-v0.2.0
+install-helper-v0.2.0.sh
+codexbar-nousportal-v0.2.0-macos.zip
+codexbar-nousportal-v0.2.0.sha256
+codexbar-nousportal-v0.2.0.txt
 ```
-
-Before publishing, the workflow:
-
-1. runs plugin fixture tests;
-2. checks out current upstream CodexBar;
-3. builds stock `CodexBarCLI`;
-4. validates that the plugin is discovered as a dynamic user plugin;
-5. packages the `.js` file;
-6. generates SHA-256 metadata;
-7. publishes the GitHub Release.
 
 ## Security model
 
-The plugin declares only the authority it needs:
+The CodexBar plugin itself receives only loopback network authority for the configured helper URL. It has no cookie permission, filesystem access, subprocess access, Node APIs, arbitrary native APIs, or direct Hermes credential access.
 
-- HTTPS access to `portal.nousresearch.com`
-- browser-cookie access for `portal.nousresearch.com`
-
-It has no local filesystem access, subprocess access, Node APIs, arbitrary network access, or Hermes credential access. All network requests go through CodexBar's plugin sandbox.
+The helper is a separate local process bound only to `127.0.0.1`. It reads Hermes credentials locally, delegates refresh to Hermes, and sends the access token only to the Nous Portal HTTPS endpoint. The token is never returned through the localhost API.
 
 ## Notes
 
