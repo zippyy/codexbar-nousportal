@@ -1,74 +1,36 @@
-const NOUS_PORTAL_PLUGIN_BUILD = "0.1.1-dev-cookie-diag";
+const NOUS_PORTAL_PLUGIN_BUILD = "0.2.0-dev-helper";
+const DEFAULT_HELPER_URL = "http://127.0.0.1:38417";
 
 defineProvider({
   id: "nous-portal",
   name: "Nous Portal",
   icon: { monogram: "N", tint: "#6C5CE7" },
-  endpoints: ["https://portal.nousresearch.com"],
-  settings: [],
-  capabilities: ["browser-cookies", "http-status"],
-  cookieDomains: ["portal.nousresearch.com"],
+  endpoints: [{ setting: "HELPER_URL", policy: "https-or-loopback-http" }],
+  settings: [
+    {
+      key: "HELPER_URL",
+      title: "Helper URL",
+      subtitle: `Use ${DEFAULT_HELPER_URL} with the companion helper.`,
+      type: "plain",
+    },
+  ],
+  capabilities: ["http-status"],
 
   async fetchUsage(ctx) {
-    const portalOrigin = "https://portal.nousresearch.com";
-    const accountURL = `${portalOrigin}/api/oauth/account`;
-    const cookieHeader = await ctx.browser.cookieHeader("portal.nousresearch.com");
-    const cookieNames = cookieHeader
-      .split(";")
-      .map((part) => part.split("=", 1)[0].trim())
-      .filter(Boolean);
-    const cookieSummary = cookieNames.length > 0 ? cookieNames.join(", ") : "none";
-
-    const tokenMatch = /(?:^|;\s*)(?:__Host-|__Secure-)?privy-token=([^;]+)/i.exec(cookieHeader);
-    const renewableSession = /(?:^|;\s*)(?:__Host-|__Secure-)?(?:privy-session|privy-refresh-token)=([^;]+)/i.test(
-      cookieHeader
-    );
-
-    const requestHeaders = {
-      Cookie: cookieHeader,
-      Accept: "application/json",
-      Origin: portalOrigin,
-      Referer: `${portalOrigin}/`,
-    };
-
-    let response;
-
-    if (tokenMatch) {
-      let privyToken = tokenMatch[1];
-      try {
-        privyToken = decodeURIComponent(privyToken);
-      } catch {
-        // Cookie was already decoded; use it as-is.
-      }
-
-      response = await ctx.http.getJSON(accountURL, {
-        headers: {
-          ...requestHeaders,
-          Authorization: `Bearer ${privyToken}`,
-        },
-      });
-    } else {
-      // Some Portal sessions may be usable through the browser cookie jar even
-      // when the short-lived Privy access-token cookie is absent. Try the exact
-      // browser session first before asking the user to re-authenticate.
-      response = await ctx.http.getJSON(accountURL, { headers: requestHeaders });
-
-      if (response.status === 401 || response.status === 403) {
-        const prefix = `[${NOUS_PORTAL_PLUGIN_BUILD}] Cookies visible to CodexBar: ${cookieSummary}.`;
-        if (renewableSession) {
-          throw ctx.fail.missingCredential(
-            `${prefix} Nous Portal has a renewable browser session but no usable access token. Open or hard-refresh portal.nousresearch.com in Chrome, then use the top Plugins Refresh button before refreshing Nous Portal.`
-          );
-        }
-        throw ctx.fail.missingCredential(
-          `${prefix} No usable Nous Portal login token was found. Sign in to portal.nousresearch.com in Chrome, then use the top Plugins Refresh button before refreshing Nous Portal.`
-        );
-      }
+    const configuredURL = String(ctx.settings.get("HELPER_URL") || "").trim();
+    if (!configuredURL) {
+      throw ctx.fail.missingCredential(
+        `Nous Portal helper URL is not configured. Set Helper URL to ${DEFAULT_HELPER_URL}, install the companion helper, then refresh.`
+      );
     }
 
+    const helperURL = configuredURL.replace(/\/+$/, "");
+    const response = await ctx.http.getJSON(`${helperURL}/v1/account`);
+
     if (response.status === 401 || response.status === 403) {
+      const detail = response.json?.error ? ` ${String(response.json.error)}` : "";
       throw ctx.fail.authenticationExpired(
-        `[${NOUS_PORTAL_PLUGIN_BUILD}] Nous Portal rejected the imported browser session. Cookies visible to CodexBar: ${cookieSummary}. Sign in to portal.nousresearch.com in Chrome, reload the Portal page, then refresh plugin discovery in CodexBar.`
+        `[${NOUS_PORTAL_PLUGIN_BUILD}] Hermes Nous authentication needs attention.${detail} Run \`hermes model\` or \`hermes status\`, then refresh Nous Portal.`
       );
     }
 
@@ -79,8 +41,14 @@ defineProvider({
       });
     }
 
+    if (response.status === 502 || response.status === 503 || response.status === 504) {
+      const detail = response.json?.error ? `: ${String(response.json.error)}` : "";
+      throw ctx.fail.providerUnavailable(`Nous Portal helper unavailable${detail}`);
+    }
+
     if (response.status < 200 || response.status >= 300) {
-      throw ctx.fail.apiFailure(`Nous Portal returned HTTP ${response.status}`);
+      const detail = response.json?.error ? `: ${String(response.json.error)}` : "";
+      throw ctx.fail.apiFailure(`Nous Portal helper returned HTTP ${response.status}${detail}`);
     }
 
     const root = response.json || {};
