@@ -1,4 +1,4 @@
-const NOUS_PORTAL_PLUGIN_BUILD = "0.2.0-dev-helper";
+const NOUS_PORTAL_PLUGIN_BUILD = "0.2.1";
 const DEFAULT_HELPER_URL = "http://127.0.0.1:38417";
 
 defineProvider({
