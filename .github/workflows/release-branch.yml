@@ -1,0 +1,33 @@
+name: Trigger release from branch
+
+on:
+  push:
+    branches:
+      - "release/v*"
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch full release workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#release/}"
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release branch version: $GITHUB_REF_NAME" >&2
+            exit 2
+          fi
+
+          echo "Dispatching release.yml for $version from main"
+          gh workflow run release.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f version="$version" \
+            -f prerelease=false
